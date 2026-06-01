@@ -30,11 +30,15 @@
 #include "gsm-app.h"
 #include "org.gnome.SessionManager.App.h"
 
+/* If a component crashes twice within a minute, we count that as a fatal error */
+#define _GSM_APP_RESPAWN_RATELIMIT_SECONDS 60
+
 typedef struct {
         char            *id;
         char            *app_id;
         int              phase;
         char            *startup_id;
+        gint64           last_restart_time;
         GDBusConnection *connection;
         GsmExportedApp  *skeleton;
 } GsmAppPrivate;
@@ -522,8 +526,23 @@ gsm_app_restart (GsmApp  *app,
                  GError **error)
 {
         GsmAppPrivate *priv;
+        gint64         current_time;
 
         priv = gsm_app_get_instance_private (app);
+
+        current_time = g_get_real_time ();
+
+        if (priv->last_restart_time > 0
+            && (current_time - priv->last_restart_time) < _GSM_APP_RESPAWN_RATELIMIT_SECONDS * G_USEC_PER_SEC) {
+                g_warning ("App '%s' respawning too quickly", priv->app_id ? priv->app_id : priv->id);
+                g_set_error (error,
+                             GSM_APP_ERROR,
+                             GSM_APP_ERROR_GENERAL,
+                             "Component '%s' crashing too quickly",
+                             priv->app_id ? priv->app_id : priv->id);
+                return FALSE;
+        }
+        priv->last_restart_time = current_time;
 
         g_debug ("Re-starting app: %s", priv->id);
 
